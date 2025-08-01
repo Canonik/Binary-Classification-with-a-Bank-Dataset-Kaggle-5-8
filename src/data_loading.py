@@ -10,5 +10,6 @@ def standard_test_set():
     return pd.read_csv(PROJECT_ROOT / "data/playground-series-s5e8/test.csv").set_index("id")
 
 def full_original_database():
-    return pd.read_csv(PROJECT_ROOT / "data/playground-series-s5e8/bank-full.csv").set_index("id")
-
+    full = pd.read_csv(PROJECT_ROOT / "data/playground-series-s5e8/bank-full.csv", sep=";")
+    full["y"] = full["y"].replace({"yes": 1, "no": 0}).astype(int)
+    return full
