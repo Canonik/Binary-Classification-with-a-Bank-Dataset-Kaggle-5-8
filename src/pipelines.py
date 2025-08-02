@@ -63,21 +63,36 @@ def log_encoding(dataframe):
  
 class LogTransformer(BaseEstimator, TransformerMixin):
 
-    def fit(self, x=None, y=None):
+    def fit(self, X, y=None):
+        self.n_features_in_ = X.shape[1]
+        self.input_features_ = X.columns if hasattr(X, "columns") else None
         self.is_fitted_ = True
         return self
     
     def transform(self, X):
         return log_encoding(X)
+    
+    def get_feature_names_out(self, input_features=None):
+        if input_features is None:
+            if self.input_features_ is not None:
+                input_features = self.input_features_
+            else:
+                input_features = [f"log_{i}" for i in range(self.n_features_in_)]
+        return np.array([f"log_{name}" for name in input_features])
         
 class DayOfYearTransformer(BaseEstimator, TransformerMixin):
 
-    def fit(self, x=None, y=None):
+    def fit(self, X, y=None):
+        self.n_features_in_ = X.shape[1]
+        self.input_features_ = X.columns if hasattr(X, "columns") else None
         self.is_fitted_ = True
         return self
     
     def transform(self, X):
         return day_month_encoding_pipeline(X)
+    
+    def get_feature_names_out(self, input_features=None):
+        return np.array(["day_of_the_year"])
 
 
 

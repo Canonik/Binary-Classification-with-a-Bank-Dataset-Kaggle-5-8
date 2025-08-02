@@ -103,22 +103,42 @@ def Total_dataset_training():
 
 def Fine_tuning_pipeline():
     parameters = {
-        "xgbclassifier__n_estimators": randint(800, 1500),
-        "xgbclassifier__max_depth": randint(3,6),
-        "xgbclassifier__learning_rate": uniform(0.01, 0.02),
-        "xgbclassifier__subsample": uniform(0.4, 0.3),
-        "xgbclassifier__colsample_bytree": uniform(0.4, 0.3),
-        "xgbclassifier__gamma": uniform(0.1, 0.4),
-        "xgbclassifier__reg_alpha": uniform(0.1, 9.9),
-        "xgbclassifier__reg_lambda": uniform(1, 9),
-        "xgbclassifier__min_child_weight": randint(3, 10),
+    "xgbclassifier__n_estimators": randint(1400, 3000),      
+    "xgbclassifier__learning_rate": uniform(0.005, 0.01),        
+    "xgbclassifier__max_depth": randint(6, 12),                   
+    "xgbclassifier__min_child_weight": randint(5, 15),            
+    "xgbclassifier__gamma": uniform(0.5, 2.0),                   
+    "xgbclassifier__subsample": uniform(0.5, 0.4),                
+    "xgbclassifier__colsample_bytree": uniform(0.5, 0.4),        
+    "xgbclassifier__reg_alpha": uniform(1, 10),                  
+    "xgbclassifier__reg_lambda": uniform(5, 15),                 
     }
 
     XGB_model = make_pipeline(full_feature_pipeline, XGBClassifier(use_label_encoder=False, eval_metric="logloss", random_state=42))
-    rnd_search = RandomizedSearchCV(XGB_model, parameters, n_iter=25, cv=5, scoring="roc_auc", random_state = 42, verbose=3)
+    rnd_search = RandomizedSearchCV(XGB_model, parameters, n_iter=300, cv=5, scoring="roc_auc", random_state = 42, verbose=3, n_jobs=6)
     rnd_search.fit(clients_attr, clients_labels)
-    print(rnd_search.best_score_)
-    print(rnd_search.best_params_)
+
+    print(f"Best ROC AUC: {rnd_search.best_score_:.5f}")
+    print("Best parameters:", rnd_search.best_params_)
+
+    best_model = rnd_search.best_estimator_
+    xgb_model = best_model.named_steps["xgbclassifier"]
+
+    preprocessing = best_model.named_steps["featureunion"].transformer_list[0][1]
+    preprocessing_doy = best_model.named_steps["featureunion"].transformer_list[1][1]
+
+    feature_names = np.concatenate([
+        preprocessing.get_feature_names_out(),
+        preprocessing_doy.get_feature_names_out()
+    ])
+
+    sorted_features = sorted(zip(xgb_model.feature_importances_, feature_names), reverse=True)
+
+    for importance, name in sorted_features[:20]:
+        print(f"{name}: {importance:.4f}")
+
+    pd.DataFrame(sorted_features, columns = ["importance", "feature"]).to_csv("reports/model_features_final_XGB_fine_tuning.csv")
+    pd.DataFrame([rnd_search.best_params_]).to_csv("reports/model_parameters_final_XGB_fine_tuning.csv")
 
 if __name__ == "__main__":
-    Total_dataset_training()
+    Fine_tuning_pipeline()
