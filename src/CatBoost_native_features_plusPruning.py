@@ -95,11 +95,16 @@ preprocessing_doy = ColumnTransformer([
     ("day", day_pipeline, time_att)
 ])
 
-feature_selector_model = joblib.load("models/XGB_finetuned_30h.pkl")
+loaded_pipeline = joblib.load("models/XGB_finetuned_30h.pkl")
 
-final_pruning = make_pipeline([
+if hasattr(loaded_pipeline, "named_steps") and "xgbclassifier" in loaded_pipeline.named_steps:
+    feature_selector_model = loaded_pipeline.named_steps["xgbclassifier"]
+else:
+    feature_selector_model = loaded_pipeline  
+
+final_pruning = make_pipeline(
     SelectFromModel(estimator=feature_selector_model, prefit=True, threshold="median")
-])
+)
 
 unpruned_full_feature_pipeline = FeatureUnion([
     ("preprocessing", preprocessing),
@@ -109,7 +114,30 @@ unpruned_full_feature_pipeline = FeatureUnion([
 ])
 
 unpruned_full_feature_pipeline.fit(clients_attr, clients_labels)
-feature_names_unpruned = unpruned_full_feature_pipeline.get_feature_names_out()
+feature_names_unpruned = []
+for name, transformer in unpruned_full_feature_pipeline.transformer_list:
+    if hasattr(transformer, "get_feature_names_out"):
+        try:
+            fn = transformer.get_feature_names_out()
+        except:
+            fn = []
+    else:
+
+        if name == "preprocessing":
+            fn = preprocessing.get_feature_names_out()
+        elif name == "preprocessing_doy":
+            fn = preprocessing_doy.get_feature_names_out()
+        elif name == "rf_oof":
+            fn = useless_att
+        elif name == "cyclical_rf_oof":
+            fn = cyclical_att
+        else:
+            raise ValueError(f"No fallback for transformer: {name}")
+    
+
+    feature_names_unpruned.extend([f"{name}__{f}" for f in fn])
+
+feature_names_unpruned = np.array(feature_names_unpruned)
 
 final_pruning.fit(unpruned_full_feature_pipeline.transform(clients_attr), clients_labels)
 mask = final_pruning.named_steps["selectfrommodel"].get_support()
@@ -150,3 +178,4 @@ def Total_dataset_training():
 
 
 if __name__ == "__main__":
+    Total_dataset_training()

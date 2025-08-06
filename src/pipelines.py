@@ -251,6 +251,23 @@ class WrapperWithY(BaseEstimator, TransformerMixin):
     def transform(self, X):
         return self.wrapped.transform(X)
     
+    def get_feature_names_out(self, input_features=None):
+        if input_features is None:
+            n_features = getattr(self.wrapped, 'n_features_in_', None)
+            if n_features is not None:
+                input_features = [f'x{i}' for i in range(n_features)]
+            else:
+                return np.array([])
+
+        if hasattr(self.wrapped, "get_feature_names_out"):
+            return self.wrapped.get_feature_names_out(input_features)
+        elif hasattr(self.wrapped, "get_support"):
+            support = self.wrapped.get_support()
+            return np.array(input_features)[support]
+        else:
+
+            return input_features
+    
 
 #needs to be wrapped with WrapperWithY class when the pipeline doesn't directly pass him labels, but only x 
 # i.e when utilizing the make_pipeline() function

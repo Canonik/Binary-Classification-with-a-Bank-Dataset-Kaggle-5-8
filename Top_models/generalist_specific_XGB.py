@@ -7,13 +7,12 @@ preds2 = pd.read_csv("reports/Catboost_cyclical.csv")
 assert all(preds1.index == preds2.index)
 
 
-print(f"difference between the two datasets: {(preds1["y"]-preds2["y"]).mean()}")
+print(f'difference between the two datasets: {(preds1["y"]-preds2["y"]).mean()}')
 
 
-'''
+
 blended = pd.DataFrame({"id": preds1["id"],
-    "y": 0.85 * preds1["y"] + preds2["y"] * 0.15
+    "y": 0.50 * preds1["y"] + preds2["y"] * 0.50
 }, columns=["id", "y"])
 
-blended.to_csv("reports/XGB_blended_submission6.csv", index=False)
-'''
+blended.to_csv("reports/XGB_blended_submission10.csv", index=False)

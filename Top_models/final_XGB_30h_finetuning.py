@@ -9,6 +9,7 @@ from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import cross_val_score, KFold, StratifiedKFold
+from sklearn.feature_selection import SelectFromModel
 from xgboost import XGBClassifier
 from sklearn.model_selection import RandomizedSearchCV
 from scipy.stats import randint, uniform
@@ -69,9 +70,23 @@ preprocessing_doy = ColumnTransformer([
     ("day", day_pipeline, time_att)
 ])
 
-full_feature_pipeline = FeatureUnion([
+feature_pipeline = FeatureUnion([
     ("preprocessing", preprocessing),
     ("preprocessing_doy", preprocessing_doy)
+])
+grbc_select = GradientBoostingClassifier(    
+    n_estimators=300,
+    learning_rate=0.05,
+    max_depth=4,
+    subsample=0.8,
+    random_state=42
+    )
+
+selector = make_pipeline(SelectFromModel(estimator=grbc_select, threshold="mean"))
+
+full_feature_pipeline = Pipeline([
+    ("features", feature_pipeline),
+    ("select", selector),
 ])
 
 def K_fold_estimation():
@@ -99,12 +114,12 @@ def Total_dataset_training():
 }
     XGB_model = make_pipeline(full_feature_pipeline, XGBClassifier(use_label_encoder=False, eval_metric="auc", random_state=42, **best_params))
     XGB_model.fit(clients_attr, clients_labels)
-    joblib.dump(XGB_model, "models/XGB_finetuned_30h.pkl")
+    joblib.dump(XGB_model, "models/XGB_finetuned_30h_selector.pkl")
 
     predictions = XGB_model.predict_proba(clients_test)
     predictions_df = pd.DataFrame( predictions[ :, 1], columns=["y"], index= clients_test.index)
 
-    predictions_df.to_csv("reports/XGB_finetuned_30h.csv")
+    predictions_df.to_csv("reports/XGB_finetuned_30h_selector.csv")
 
 def Fine_tuning_pipeline():
     parameters = {
