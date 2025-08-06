@@ -16,7 +16,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from data_loading import standard_training_set, standard_test_set, full_original_database
+from Top_models.data_loading import standard_training_set, standard_test_set, full_original_database
 from pipelines import day_month_encoding
 
 
