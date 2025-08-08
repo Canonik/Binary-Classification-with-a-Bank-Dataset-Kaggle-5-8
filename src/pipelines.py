@@ -47,28 +47,103 @@ def day_month_encoding_pipeline(df):
     return np.array(result).reshape(-1, 1)
 
 
-def month_sin_encoding(id):
+def month_sin_encoding(df):
     month_int = {
         'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
         'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
     }
-    month = month_int[id["month"]]
-    return np.sin(2 * np.pi * month / 12)
+    months = df["month"].map(month_int)
+    return np.sin(2 * np.pi * months / 12).to_numpy().reshape(-1, 1)
 
-def month_cos_encoding(id):
+def month_cos_encoding(df):
     month_int = {
         'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
         'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
     }
-    month = month_int[id["month"]]
-    return np.cos(2 * np.pi * month / 12)
+    months = df["month"].map(month_int)
+    return np.cos(2 * np.pi * months / 12).to_numpy().reshape(-1, 1)
 
 
 def log_encoding(dataframe):
     df = dataframe.copy()
     return df.apply(lambda x : np.sign(x) * np.log1p(abs(x))).to_numpy()
+
+class MonthDayPreprocessor(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        df = X.copy()
+
+        # Map month strings to numbers
+        month_map = {
+            'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+            'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+        }
+        df["month_num"] = df["month"].map(month_map)
+
+        # Create an initial datetime and coerce errors to NaT
+        dates = pd.to_datetime(
+            dict(year=2000, month=df["month_num"], day=df["day"]),
+            errors="coerce"
+        )
+
+        # Find invalid dates (NaT)
+        invalid_mask = dates.isna()
+        if invalid_mask.any():
+            print(f"⚠️ Fixing {invalid_mask.sum()} invalid date(s) by setting day=28")
+
+            # Replace invalid days with 28
+            df.loc[invalid_mask, "day"] = 28
+
+            # Recompute dates after fixing
+            dates = pd.to_datetime(
+                dict(year=2000, month=df["month_num"], day=df["day"]),
+                errors="raise"
+            )
+
+        # Extract day of year
+        df["day_of_the_year"] = dates.dt.dayofyear
+
+        # Return only required features
+        return df[["month_num", "day_of_the_year"]].to_numpy()
+
  
  
+class sinMonthTransformer(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        X = np.asarray(X)
+        return np.sin(2 * np.pi * X[:, 0] / 12).reshape(-1, 1)
+
+class cosMonthTransformer(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        X = np.asarray(X)
+        return np.cos(2 * np.pi * X[:, 0] / 12).reshape(-1, 1)
+
+class sinDayTransformer(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        X = np.asarray(X)
+        return np.sin(2 * np.pi * X[:, 1] / 366).reshape(-1, 1)
+
+class cosDayTransformer(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        X = np.asarray(X)
+        return np.cos(2 * np.pi * X[:, 1] / 366).reshape(-1, 1)
+
+        
+
 class LogTransformer(BaseEstimator, TransformerMixin):
 
     def fit(self, X, y=None):
@@ -200,10 +275,12 @@ class RF_useless_features(BaseEstimator, TransformerMixin):
 
     def fit(self, X, y):
 
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X, columns=self.features)
+        X = X[self.features].copy()
+
         if y is None:
             raise ValueError("y cannot be None for RF_useless_features")
-        if self.features is not None:
-            X = X[self.features].copy()
 
         self.imputer = SimpleImputer(strategy="mean")
         X_imp = self.imputer.fit_transform(X)
@@ -323,7 +400,7 @@ class FeatureFromRegressor(MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         self.n_features_in_ = self.estimator_.n_features_in_
         if hasattr(self.estimator_, "feature_names_in_"):
             self.feature_names_in_ = self.estimator_.feature_names_in_
-        return self  # always return self!
+        return self  
     
     def transform(self, X):
         check_is_fitted(self)
@@ -339,6 +416,42 @@ class FeatureFromRegressor(MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         estimator_short_name = estimator_class_name.lower().replace("_", "")
         return [f"{estimator_short_name}_prediction_{i}"
                 for i in range(n_outputs)]
+    
+
+class OOFJobTransformer(TransformerMixin, BaseEstimator):
+    def __init__(self, columns=None):
+        self.columns = columns
+
+
+    def fit(self, X, y=None):
+        if not isinstance(X, pd.DataFrame) and not isinstance(X, pd.Series):
+            raise TypeError("Pandas Dataframes or Series are only supported")
+        if len(X.columns) > 1 and not self.columns:
+            raise ValueError("When passing multiple attributes, make sure to specify 'columns' parameter")
+        
+        X_cat = X.copy()
+        self.freq_map_ = {}
+
+        if self.columns:
+            for col in self.columns:
+                self.freq_map_[col] = X_cat[col].value_counts(normalize=True).to_dict()
+        else:
+            col = X_cat.columns[0]
+            self.freq_map_[col] = X_cat[col].value_counts(normalize=True).to_dict()
+
+        return self
+        
+    def transform(self, X):
+        X_cat = X.copy()
+        if self.columns:
+            for col in self.columns:
+                X_cat[col] = X_cat[col].map(self.freq_map_[col])
+        else:
+            col = X_cat.columns[0]
+            X_cat[col] = X_cat[col].map(self.freq_map_[col])
+
+        return X_cat.values
+        
 
 class StandardScalerClone(TransformerMixin, BaseEstimator):
     def __init__(self, with_mean=True, with_std=True):
@@ -349,7 +462,8 @@ class StandardScalerClone(TransformerMixin, BaseEstimator):
         if isinstance(X, pd.DataFrame):
             self.columns_ = X.columns
             self.features_names_in_ = np.array(X.columns)
-        
+            self.n_features_in_ = len(self.features_names_in_.tolist())
+
             self.mean_ = []
             self.std_ = []
             for column in self.columns_:
@@ -366,7 +480,8 @@ class StandardScalerClone(TransformerMixin, BaseEstimator):
                 else:
                     self.std_.append(1)
         elif isinstance(X, np.ndarray):
-
+            self.features_names_in_ = None
+            self.n_features_in_ = X.shape[1]
             X_array = X.copy()
             self.mean_ = []
             self.std_ = []
@@ -401,5 +516,26 @@ class StandardScalerClone(TransformerMixin, BaseEstimator):
             for i, (std, mean) in enumerate(zip(self.std_, self.mean_)):
                 X_inverse[:, i] = X_inverse[:, i] * std + mean
             return X_inverse
+        
+    def get_feature_names_out(self, input_features=None):
+        if input_features is not None:
+            input_features = np.asarray(input_features)
+           
+            if self.n_features_in_ != len(input_features):
+                raise ValueError("Invalid input_features length passed")
+        
+            if self.features_names_in_ is not None:
+                if not np.array_equal(self.features_names_in_, input_features):
+                    raise ValueError("Invalid input_features names passed")
+                return self.features_names_in_
+            else:
+                return np.array([f"x{i}" for i in range(len(input_features))])
+    
+        if self.features_names_in_ is not None:
+            return self.features_names_in_
+    
+        return np.array([f"x{i}" for i in range(self.n_features_in_)])
+
+       
 
 
