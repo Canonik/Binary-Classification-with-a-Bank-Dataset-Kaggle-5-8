@@ -13,6 +13,7 @@ from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import cross_val_score, KFold, StratifiedKFold, RandomizedSearchCV
 from xgboost import XGBClassifier
+import lightgbm as lgb
 from sklearn.feature_selection import SelectFromModel
 from catboost import CatBoostClassifier
 from scipy.stats import randint, uniform
@@ -27,13 +28,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from data_loading import standard_training_set, standard_test_set, full_original_database
 from pipelines import day_month_encoding, log_encoding, month_sin_encoding, month_cos_encoding, LogTransformer, DayOfYearTransformer, RF_useless_features, WrapperWithY, OOFJobTransformer
 
-num_att = ["age", "pdays", "previous", "duration"] 
-cat_att =[ "job", "marital", "education", "default", "housing", "loan", "contact", "poutcome"] #-job
-log_att =["balance", "campaign", "duration"] 
-time_att = ["day", "month"]
-job_att = ["job"]
-useless_att = ["previous", "age","balance","duration","campaign"]
-cyclical_att = ["month_sin", "month_cos", "day_sin", "day_cos"]
+num_att = ["pdays", "previous", "duration"] 
+cat_att =["housing", "loan", "contact", "poutcome"] 
+log_att =["balance", "duration"] 
 
 
 clients = standard_training_set().reset_index(drop=True)
@@ -69,14 +66,13 @@ day_pipeline = make_pipeline(
     StandardScaler()
 )
 job_pipeline = make_pipeline(
-    OOFJobTransformer(columns=cat_att + job_att)
+    OOFJobTransformer(columns=cat_att)
 )
 
 preprocessing = ColumnTransformer([
     ("num", num_pipeline, num_att),
     ("log", log_pipeline, log_att),
     ("cat", cat_pipeline, cat_att),
-    ("day", day_pipeline, time_att),
 ], remainder="drop")
 
 oof_preprocessing = ColumnTransformer([
@@ -87,36 +83,36 @@ full_preprocessing = FeatureUnion([
     ("oof_preprocessing", oof_preprocessing),
     ("preprocessing", preprocessing)
 ])
+lgb_params = {
+    'objective': 'binary',
+    'boosting_type': 'gbdt',
+    'metric': 'auc',
+    'learning_rate': 0.03583,
+    'num_leaves': 350,
+    'max_depth': -1,
+    'min_data_in_leaf': 5,
+    'feature_fraction': 0.85,
+    'bagging_fraction': 0.85,
+    'bagging_freq': 1,
+    'lambda_l1': 0.2,
+    'lambda_l2': 0.2,
+    'max_bin': 511,
+    'cat_smooth': 10,
+    'cat_l2': 5,
+    'n_jobs': -1,
+    'random_state': 42,
+    'verbose': 1
+}
 
 full_pipeline = Pipeline([
     ("full_preprocessing", full_preprocessing),
-    ("model", XGBClassifier(
-    colsample_bytree=0.4,        
-    gamma=0.0,                 
-    learning_rate=0.005,      
-    max_depth=20,                
-    min_child_weight=1,          
-    n_estimators=20000,          
-    reg_alpha=0.0,             
-    reg_lambda=0.0,            
-    scale_pos_weight=1.5883,     
-    subsample=0.7,             
-    use_label_encoder=False,
-    eval_metric="auc",
-    random_state=42,
-    verbosity=1,
-    tree_method="hist",          
-    grow_policy="lossguide",     
-))
+    ("model", lgb.LGBMClassifier(**lgb_params, n_estimators=40000))
 ])
 
 if __name__ == "__main__":
-#CV AUC: 0.96725 job + oof job encoding
-#CV AUC: 0.96725 oof cat + cat 
-#CV AUC: 0.96724 simple pipeline, no oof encoding
-#CV AUC: 0.96723 oof encoding
-#CV AUC: 0.96672 oof cat encoding    
-    ''' #cross eval auc with 5 folds
+   
+    #cross eval auc with 5 folds CV AUC: 0.96768
+    '''
     scores = cross_val_score(
         full_pipeline, clients_attr, clients_labels, 
         cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
@@ -128,15 +124,17 @@ if __name__ == "__main__":
     
     '''
     #full pipeline on full training set
-    XGB_model = full_pipeline.fit(clients_attr, clients_labels)
+    GBM_model = full_pipeline.fit(clients_attr, clients_labels)
     
-    joblib.dump(XGB_model, "models/XGB_finetuned_overfit_beast.pkl")
+    joblib.dump(GBM_model, "models/GBM_pipeline.pkl")
     
-    predictions = XGB_model.predict_proba(clients_test)
+    predictions = GBM_model.predict_proba(clients_test)
     predictions_df = pd.DataFrame( predictions[ :, 1], columns=["y"], index= clients_test.index)
 
-    predictions_df.to_csv("reports/XGB_finetuned_overfit_beast.csv")
+    predictions_df.to_csv("reports/GBM_best_oof_cat_plus_cat.csv")
+
     '''
+    # cv5 cross training for stacking
     predictions_df = pd.DataFrame(np.zeros((len(clients_attr), 1)), columns=["y"], index=clients_attr.index)
 
     for train_idx, val_idx in StratifiedKFold(n_splits=5, shuffle=True, random_state=42).split(clients_attr, clients_labels):
@@ -146,8 +144,8 @@ if __name__ == "__main__":
         y_val_fold = clients_labels.iloc[val_idx]
 
 
-        xgb_model = full_pipeline.fit(X_train_fold, y_train_fold)
-        predictions_df.iloc[val_idx, 0] = xgb_model.predict_proba(X_val_fold)[:, 1]
+        GBM_model = full_pipeline.fit(X_train_fold, y_train_fold)
+        predictions_df.iloc[val_idx, 0] = GBM_model.predict_proba(X_val_fold)[:, 1]
 
-    predictions_df.to_csv("reports/XGB_finetuned_30h_pipeline_cv5.csv")
+    predictions_df.to_csv("reports/GBMh_pipeline_cv5.csv")
     '''

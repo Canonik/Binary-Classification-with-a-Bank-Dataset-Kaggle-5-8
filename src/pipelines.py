@@ -451,6 +451,14 @@ class OOFJobTransformer(TransformerMixin, BaseEstimator):
             X_cat[col] = X_cat[col].map(self.freq_map_[col])
 
         return X_cat.values
+    def get_feature_names_out(self, input_features=None):
+        if self.columns:
+            return np.array([f"oof__{col}" for col in self.columns])
+        elif input_features is not None:
+            return np.array([f"oof__{col}" for col in input_features])
+        else:
+            return np.array(["oof__feature_0"])
+
         
 
 class StandardScalerClone(TransformerMixin, BaseEstimator):
@@ -535,6 +543,18 @@ class StandardScalerClone(TransformerMixin, BaseEstimator):
             return self.features_names_in_
     
         return np.array([f"x{i}" for i in range(self.n_features_in_)])
+    
+
+class NoiseAdder(BaseEstimator, TransformerMixin):
+    def __init__(self, noise_std=0.02):
+        self.noise_std = noise_std
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        noise = np.random.normal(0, self.noise_std, X.shape)
+        return X + noise 
 
        
 

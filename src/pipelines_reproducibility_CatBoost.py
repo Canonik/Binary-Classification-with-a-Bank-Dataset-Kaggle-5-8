@@ -5,7 +5,7 @@ np.random.seed(42)
 random.seed(42)
 import pandas as pd
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler, OneHotEncoder, OrdinalEncoder
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, OrdinalEncoder, PolynomialFeatures
 from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline, FeatureUnion
@@ -27,40 +27,28 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from data_loading import standard_training_set, standard_test_set, full_original_database
 from pipelines import LogTransformer, DayOfYearTransformer, RF_useless_features, WrapperWithY, sinMonthTransformer, cosMonthTransformer, sinDayTransformer, cosDayTransformer, MonthDayPreprocessor
 
-num_att = ["age", "pdays", "previous"]
+num_att = ["age", "pdays", "previous","balance","duration","campaign"]
 cat_att =["job", "marital", "education", "default", "housing", "loan", "contact", "poutcome"]
-log_att =["balance", "duration", "campaign"]
 time_att = ["day", "month"]
-useless_att = ["previous", "age","balance","duration","campaign"]
+log_att =["balance", "campaign", "duration"]
 cyclical_att = ["month_sin", "month_cos", "day_sin", "day_cos"]
 
 clients = standard_training_set().reset_index(drop=True)
 clients_attr = clients.drop("y", axis=1)
 clients_labels = clients["y"]
 
-full_data = full_original_database().reset_index(drop=True)
-full_data_clients_attr = full_data.drop("y", axis=1)
-full_data_clients_labels = full_data["y"]
-
-clients_attr = pd.concat([clients_attr, full_data_clients_attr], ignore_index=True)
-clients_labels = pd.concat(
-    [clients_labels.reset_index(drop=True), full_data_clients_labels.reset_index(drop=True)],
-    ignore_index=True
-)
 clients_test = standard_test_set()
+
+print("data retrieved")
 
 num_pipeline = make_pipeline(
     SimpleImputer(strategy="median"),
-    StandardScaler())
-
-log_pipeline = make_pipeline(
-    LogTransformer(),
-    StandardScaler())
+    StandardScaler(),
+    PolynomialFeatures(degree=6, interaction_only=True, include_bias=False))
 
 day_pipeline = make_pipeline(
     DayOfYearTransformer(),
     StandardScaler())
-
 
 sinMonth_pipeline = make_pipeline(
     sinMonthTransformer())
@@ -74,26 +62,14 @@ sinDay_pipeline = make_pipeline(
 cosDay_pipeline = make_pipeline(
     cosDayTransformer())
 
-
-useless_oof_pipeline = make_pipeline(
-    WrapperWithY(RF_useless_features(features=useless_att)),
+log_pipeline = make_pipeline(
+    LogTransformer(),
     StandardScaler())
 
 cyclical_oof_pipeline = make_pipeline(
     WrapperWithY(RF_useless_features(features=cyclical_att)),
     StandardScaler())
 
-
-cat_pipeline = make_pipeline(
-    OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
-)
-
-
-preprocessing = ColumnTransformer([
-    ("num", num_pipeline, num_att),
-    ("log", log_pipeline, log_att),
-    ("cat", "passthrough", cat_att)  # will re-add later
-], remainder="passthrough")
 
 
 sincos_pipeline = Pipeline([
@@ -110,38 +86,45 @@ sincos_pipeline = Pipeline([
 full_feature_pipeline = FeatureUnion([
     ("num_log", ColumnTransformer([
         ("num", num_pipeline, num_att),
-        ("log", log_pipeline, log_att),
+        ("log", log_pipeline, log_att)
     ], remainder="drop")),
-    
-    ("cat", ColumnTransformer([
-        ("cat", cat_pipeline, cat_att)
-    ], remainder="drop")),
-    
+
     ("sincos", sincos_pipeline),
-    ("useless_oof", useless_oof_pipeline),
 ])
+
+X_num = full_feature_pipeline.fit_transform(clients_attr)
+
+# Get categorical columns from original dataframe
+X_cat = clients_attr[cat_att].reset_index(drop=True)
+
+# Combine numeric + cat as a single DataFrame (CatBoost can handle strings)
+X_combined = pd.concat([pd.DataFrame(X_num), X_cat], axis=1)
+
+# Cat indices (last len(cat_att) columns)
+cat_features_indices = list(range(X_combined.shape[1]-len(cat_att), X_combined.shape[1]))
 
 cat_model = CatBoostClassifier(    #0.95607
-        iterations=2500,
-        learning_rate=0.09706494663217939,
-        depth=6,
-        l2_leaf_reg=.385284379693478,
+        iterations=100000,
+        learning_rate=0.038,
+        depth=13,
+        l2_leaf_reg=4,
         eval_metric="AUC",
+        task_type="GPU",
         random_seed=42,
         verbose=100,
-        bagging_temperature=0.6393738721699852,
-        border_count=128,
+        bagging_temperature=1,
+        min_data_in_leaf=8,
+        class_weights = [1, 7.288],
+        border_count=512,
     )
 
-final_pipeline = Pipeline([
-    ("features", full_feature_pipeline),
-    ("catboost", cat_model)
-])
 
 print("MODEL LOADED")
 
 if __name__ == "__main__":
-
+    
+    '''
+    #cross evaluation
     scores = cross_val_score(
         final_pipeline, clients_attr, clients_labels, 
         cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
@@ -150,15 +133,44 @@ if __name__ == "__main__":
         scoring="roc_auc")
     
     print(f"CV AUC: {scores.mean():.5f}")
+   '''
 
-
-    '''
-    XGB_model = full_feature_pipeline.fit(clients_attr, clients_labels)
+    # full dataset training
+    cat_model.fit(
+    X_combined, 
+    clients_labels, 
+    cat_features=cat_features_indices,
+    eval_set=None,  
+    verbose=100,
+    early_stopping_rounds=500)
     
-    joblib.dump(XGB_model, "models/XGB_finetuned_30h_selector.pkl")
+    print("MODEL_FITTED")
 
-    predictions = XGB_model.predict_proba(clients_test)
+
+    X_test_num = full_feature_pipeline.transform(clients_test)
+    X_test_cat = clients_test[cat_att].reset_index(drop=True)
+    X_test_combined = pd.concat([pd.DataFrame(X_test_num), X_test_cat], axis=1)
+
+    predictions = cat_model.predict_proba(X_test_combined)
     predictions_df = pd.DataFrame( predictions[ :, 1], columns=["y"], index= clients_test.index)
-
-    predictions_df.to_csv("reports/XGB_finetuned_30h_selector.csv")
+    
+    print("MODEL_TRAINED")
+    predictions_df.to_csv("reports/CatBoost_maxxing1.csv")
     '''
+
+    # out of fold predictions for meta stacking
+    predictions_df = pd.DataFrame(np.zeros((len(clients_attr), 1)), columns=["y"], index=clients_attr.index)
+
+    for train_idx, val_idx in StratifiedKFold(n_splits=5, shuffle=True, random_state=42).split(clients_attr, clients_labels):
+        X_train_fold = clients_attr.iloc[train_idx]
+        X_val_fold = clients_attr.iloc[val_idx]
+        y_train_fold = clients_labels.iloc[train_idx]
+        y_val_fold = clients_labels.iloc[val_idx]
+
+
+        cat_model = final_pipeline.fit(X_train_fold, y_train_fold)
+        predictions_df.iloc[val_idx, 0] = cat_model.predict_proba(X_val_fold)[:, 1]
+
+    predictions_df.to_csv("reports/CatBoost_cyclical_pipeline_cv5.csv")
+
+   '''
